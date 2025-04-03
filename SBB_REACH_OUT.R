@@ -12,7 +12,7 @@ library(questionr) # To convert the log odds to odds ratios
 library(sjmisc) # To use na.omit command to drop missing data
 
 library(readxl)
-df <- read_excel('U:/SBB_REACH_OUT.xlsx')
+df <- read_excel('filepath/filename.xlsx')
 
 #descriptive stats 
 library(summarytools)
