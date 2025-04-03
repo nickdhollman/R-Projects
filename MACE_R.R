@@ -2,27 +2,6 @@
 
 https://bookdown.org/wadetroberts/r-you-ready-for-r/multiple-logistic-regression.html
 
-
-# the dataset below is too large to import so skipping to import data already in local files
-# data <- read_sas('Z:/NSQIP/SAS Datasets/nsqip_2005_2022_new.sas7bdat')
-
-# the steps between the nsqip_2005_2002_new SAS dataset & the mace_master dataset can be seen 
-# in the SAS file 'Khorgami_MACE_analysis_2_20' where I filtered the NSQIP master dataset
-# by OperYR between 2016 & 2022, and (CASETYPE='Emergent' or CASETYPE='Urgent') or 
-# (2016 le OperYR le 2020 and ELECTSURG='No')
-
-# in addition, I defined MACE using the following logic:
-# if (NCDMI gt 0 or NCNSCVA gt 0 or NCDARREST gt 0) then MACE_b=1;    
-# else if NCDMI=. and NCNSCVA=. and NCDARREST=. then MACE_b=.;                                                                                                                                                                          
-# else MACE_b=0;
-
-# the final step to create the mace_master_ dataset was to apply the exclusion criteria
-# by only including CPT codes related to abdominal surgery & also coded laparoscopic 
-# surgery by CPT code
-
-# the above code would be accomplished using filter for exclusion/inclusion of only certain observations in the dataset 
-# in addition, if_else and case_when could be used to create the MACE outcome 
-
 library(haven) # for importing SAS data
 library(gmodels) # for CrossTable crosstab 
 library(psych) # for describe & descirbeBy
@@ -30,9 +9,9 @@ library(summarytools) # for freq
 library(tidyverse)
 library(ggplot2)
 
-data <- read_sas('C:/users/nhollman/Documents/SAS Datasets/mace_master_.sas7bdat') 
+data <- read_sas('filepath/filename.sas7bdat') 
 
-# starting place to replicate SAS code is at *identify outcomes
+# *identify outcomes
 freq(data$Age)
 # set age age value of '90+' to 90, 'NULL' to missing and convert to numeric
 data_ <- data %>%
@@ -305,7 +284,7 @@ rm("data_", "data_a", "data_b", "data_c", "data_d", "data_e", "data_f", "data_g"
 
 ##### import procedure category dataset to limit to only procedures of interest #####
 library(readxl)
-procedure_cat <- read_excel("U:/Khorgami_Dang_Mace/procedure category.xlsx")
+procedure_cat <- read_excel("filepath/filename.xlsx")
 
 ## inner join current dataset to procedure category dataset to have proc_category 
 
@@ -442,7 +421,7 @@ freq(mace_cat$laparoscopic)
 freq(mace_cat$OperYR)
 
 ## r crashed, so I am importing dataset that is trimmed down to make the process easier #
-mace_a_ <- read_sas('C:/users/nhollman/Documents/SAS Datasets/mace_a_.sas7bdat') 
+mace_a_ <- read_sas('filepath/filename.sas7bdat') 
 freq(mace_a_$MACE_b)
 freq(mace_a_$laparoscopic)
 freq(mace_a_$OperYR)
