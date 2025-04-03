@@ -5,7 +5,7 @@ library(readr)
 library(tidyverse)
 
 #the show_col_types option if specified as TRUE will set the first row of the dataset as the column names
-data1 <- read_csv('U:/BBS_Richards_Shelton/BardetBiedlSyndromeB_DATA_2024-08-02_1351.csv',show_col_types = TRUE)
+data1 <- read_csv('filepath/filename.csv',show_col_types = TRUE)
 
 #filter to those with BBS diagnosis
 BBS <- data1 %>% filter(bbs_dx==1)
@@ -300,7 +300,7 @@ freq(BBS_l$melanoma)
 freq(BBS_m$bmark_loc_cat)
 
 ######## IMPORT FINAL DATASET ########
-BBS_o <- read_csv('U:/BBS_Richards_Shelton/BBS data after analysis.csv',show_col_types = TRUE)
+BBS_o <- read_csv('filepath/filename.csv',show_col_types = TRUE)
 
 ### set na values for all symptoms to 0 ###
 BBS_o$pmrep[is.na(BBS_o$pmrep)] <- 0
@@ -350,7 +350,7 @@ BBS_o <- BBS_o %>%
 symptom_check_c <- BBS_o %>% select(tot_symptoms, major_symptoms, minor_symptoms, clinic_diag)
 
 ## export final dataset w/ imputed values 
-write.csv(BBS_o, "U:/BBS data after analysis and imputation.csv", na='')
+write.csv(BBS_o, "filepath/filename.csv", na='')
 
 
 #### Primary aim -- prevalence of birthmarks among those with BBS
@@ -593,7 +593,7 @@ BBS_o %>%
   get_summary_stats(tot_symptoms, type = "mean_sd")
 
 ### EXPORT RESULTS TO DOUBLE CHECK IN SAS
-write.csv(BBS_o, "U:/BBS data after analysis.csv", na='')
+write.csv(BBS_o, "filepath/filename.csv", na='')
 
 ## Association between diagnostic criteria and birthmark
 oddsratio.wald(table(BBS_o$clinic_diag, BBS_o$bmark), rev = c("both"))
@@ -628,7 +628,7 @@ BBS_o %>%
 
 BBS_o %>% cohens_d(major_symptoms ~ bmark, var.equal=TRUE)
 
-BBS_o <- read_csv('U:/BBS_Richards_Shelton/BBS data after analysis and imputation.csv',show_col_types = TRUE)
+BBS_o <- read_csv('filepath/filename.csv',show_col_types = TRUE)
 ################# DATA VISUALIZATION OF POSITIVE RESULTS #######################
 BBS_o$bmark[BBS_o$bmark == "Birthmark Reported (n=16)"] <- 1
 BBS_o$bmark[BBS_o$bmark == "No Birthmark Reported (n=51)"] <- 0
