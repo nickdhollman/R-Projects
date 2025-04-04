@@ -490,56 +490,123 @@ library(car)
 vif(train_mod)
 #all values < 2
 
-############ THIS IS THE ONLY THING I DID NOT RE-GENERATE FROM MACE ANALYSIS #########
-# create training model risk score -- did not do this yet as I know if I can reproduce model estimates this can be done as done below
+# create training model risk score 
 # assign risk score based on aOR in train_model, then sum risk scores together to get risk_score variable for each patient 
-train_mod_score <- train_mod %>% mutate(male_score = ifelse(male==1, 1, 0))
-train_mod_score <- train_mod_score %>% mutate(age_score = ifelse(age_binary==1, 2, 0))
-train_mod_score <- train_mod_score %>% mutate(low_bmi_score = ifelse(low_BMI_==1, 1, 0))
-train_mod_score <- train_mod_score %>% mutate(diabetes_score = ifelse(diabetes_==1, 1, 0))
-train_mod_score <- train_mod_score %>% mutate(smoker_score = ifelse(smoker==1, 1, 0))
+train_clean_score <- train_clean %>% mutate(male_score = ifelse(male==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(age_score = ifelse(age_binary==1, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(low_bmi_score = ifelse(low_BMI_==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(diabetes_score = ifelse(diabetes_==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(smoker_score = ifelse(smoker==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(copd_score = ifelse(copd==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(chf_score = ifelse(chf==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(hypermed_score = ifelse(hypermed_==1, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(dialysis_score = ifelse(dialysis_==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(fnstat_score = ifelse(fnstat_final==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(bleed_score = ifelse(bleed==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(ventilator_score = ifelse(ventilator==1, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(sepsis_score = ifelse(sepsis==1, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(ascites_score = ifelse(ascites_==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(laparoscopic_score = ifelse(laparoscopic==0, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(proc_score = ifelse(high_risk_proc==1, 3, 0))
+train_clean_score <- train_clean_score %>% mutate(sodium_score = ifelse(sodium_low==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(creat_score = ifelse(creat_high==1, 2, 0))
+train_clean_score <- train_clean_score %>% mutate(albumin_score = ifelse(albumin_high==0, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(alk_score = ifelse(alk_high==1, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(plate_score = ifelse(plate_high==0, 1, 0))
+train_clean_score <- train_clean_score %>% mutate(risk_score = male_score + age_score + low_bmi_score + diabetes_score + smoker_score + copd_score +
+                                                    chf_score + hypermed_score + dialysis_score + fnstat_score + bleed_score + ventilator_score + 
+                                                    sepsis_score + ascites_score + laparoscopic_score + proc_score + sodium_score + creat_score +
+                                                    albumin_score + alk_score + plate_score)
+freq(train_clean_score$risk_score)
+rm("mace_train", "train_clean")
+describe(train_clean_score$risk_score)
 
-# determine cut-offs for risk score - THIS WOULD BE DONE BY GENERATING YUDEN J AND EUCLIDEAN DISTANCE VALUES - BELOW IS A TEMPLATE FOR THIS
+# determine cut-offs for risk score - THIS IS DONE BY GENERATING YUDEN J VALUES - higher the better
 train_mod_risk_score <- glm(MACE_b ~ risk_score, 
-                 data = train_mod_score, family = "binomial")
+                 data = train_clean_score, family = "binomial")
+summary(train_mod_risk_score)
+exp(cbind(OR = coef(train_mod_risk_score), confint(train_mod_risk_score)))
 
-predicted_probs <- predict(train_mod_risk_score, type = "response")
+predicted_probs_score <- predict(train_mod_risk_score, type = "response")
 
-calc_youden <- function(threshold) {
-  # Convert predicted probabilities to class predictions based on the threshold
-  predicted_class <- ifelse(predicted_probs >= threshold, 1, 0)
-  
-  # Create confusion matrix
-  confusion <- table(Predicted = predicted_class, Actual = mace_train$MACE_b)
-  
-  # Calculate sensitivity and specificity
-  sensitivity <- confusion[2, 2] / sum(confusion[2, ])
-  specificity <- confusion[1, 1] / sum(confusion[1, ])
-  
-  # Calculate Youden's J statistic
-  youden_j <- sensitivity + specificity - 1
-  return(youden_j)
-}
+roc_curve_score <- roc(train_clean_score$MACE_b, predicted_probs_score)
 
-predicted_probs <- predict(train_mod_risk_score, type = "response")# Evaluate Youden's J across multiple thresholds
-thresholds <- seq(0, 1, by = 0.01)
-youden_j_values <- sapply(thresholds, calc_youden)
+# Plot the ROC curve
+plot(roc_curve_score, main = "ROC Curve", col = "blue")
 
-# Find the threshold with the maximum Youden's J
-best_threshold <- thresholds[which.max(youden_j_values)]
-best_youden_j <- max(youden_j_values)
+# AUC with 95% Confidence Interval
+auc_value_score <- auc(roc_curve_score)
+ci_value_score <- ci.auc(roc_curve_score)
 
-print(paste("Best Threshold: ", best_threshold))
-print(paste("Maximum Youden's J: ", best_youden_j))
+# Print the AUC and its 95% CI
+print(paste("AUC: ", auc_value_score))
+print(paste("95% CI: ", ci_value_score))
 
-plot(thresholds, youden_j_values, type = "l", col = "blue", 
-     xlab = "Threshold", ylab = "Youden's J", 
-     main = "Youden's J Statistic vs Threshold")
+# get youden J value and find cut-off based off balance of youden J, sensitivity, and specificity
+# install.packages("cutpointr")
+library(cutpointr)
+opt_cut <- cutpointr(
+  train_clean_score, 
+  x = risk_score, 
+  class = MACE_b, 
+  direction = ">=", 
+  pos_class = 1, 
+  neg_class = 0, 
+  method = maximize_metric, 
+  metric = youden
+)
+summary(opt_cut)
+plot_metric(opt_cut)
+
+roc_result <- cutpointr::roc(
+  train_clean_score, 
+  x = risk_score, 
+  class = MACE_b, 
+  pos_class = 1, 
+  neg_class = 0, 
+  direction = ">="
+)
+
+# Add Youden's J index, sensitivity, and specificity as metrics
+roc_result_with_metrics <- roc_result %>% mutate(sensitivity = tp/(tp + fn))
+roc_result_with_metrics <- roc_result_with_metrics %>% mutate(specificity = tn/(tn + fp))
+roc_result_with_metrics <- roc_result_with_metrics %>% mutate(PPV = tp/(tp + fp))
+roc_result_with_metrics <- roc_result_with_metrics %>% mutate(NPV = tn/(tn + fn))
+roc_result_with_metrics <- roc_result_with_metrics %>% mutate(youden = sensitivity + (specificity - 1))
+rounded_roc_res <- round(roc_result_with_metrics, digits = 3)
+colnames(rounded_roc_res)[colnames(rounded_roc_res) == "x.sorted"] <- "risk_score"
+
+# View the result
+roc_result_comp <- rounded_roc_res %>% select(risk_score, youden, sensitivity, specificity, PPV, NPV)
 
 # create training model categories
 ### use case_when statement here to create risk categories decided upon above from youden J
+train_clean_score <- train_clean_score %>% mutate(risk_category = case_when(
+  risk_score >= 0 & risk_score < 5 ~ 0,
+  risk_score >= 5 & risk_score < 9 ~ 1,
+  risk_socre >= 9 ~ 3,
+  TRUE ~ NA_real_))
 
 ### then plug risk categories into logit model 
+train_mod_risk_score_cat <- glm(MACE_b ~ as.factor(risk_category), 
+                            data = train_clean_score, family = "binomial")
+summary(train_mod_risk_score_cat)
+exp(cbind(OR = coef(train_mod_risk_score_cat), confint(train_mod_risk_score_cat)))
+
+predicted_probs_score_cat <- predict(train_mod_risk_score_cat, type = "response")
+
+roc_curve_score_cat <- roc(train_mod_risk_score_cat$MACE_b, predicted_probs_score_cat)
+
+# Plot the ROC curve
+plot(roc_curve_score_cat, main = "ROC Curve", col = "blue")
+
+# AUC with 95% Confidence Interval
+auc_value_score_cat <- auc(roc_curve_score_cat)
+ci_value_score_cat <- ci.auc(roc_curve_score_cat)
+
+# Print the AUC and its 95% CI
+print(paste("AUC: ", auc_value_score_cat))
+print(paste("95% CI: ", ci_value_score_cat))
 
 # create test model 
 mace_test$laparoscopic <- factor(mace_test$laparoscopic, levels = c(0, 1), labels = c("Open Surgery", "Laparoscopic"))
@@ -581,3 +648,79 @@ print(paste("95% CI: ", ci_value_test))
 # generate VIF for model
 vif(test_mod)
 #all values < 2
+
+# create test model risk score 
+# assign risk score based on aOR in train_model, then sum risk scores together to get risk_score variable for each patient 
+test_clean_score <- test_clean %>% mutate(male_score = ifelse(male==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(age_score = ifelse(age_binary==1, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(low_bmi_score = ifelse(low_BMI_==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(diabetes_score = ifelse(diabetes_==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(smoker_score = ifelse(smoker==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(copd_score = ifelse(copd==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(chf_score = ifelse(chf==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(hypermed_score = ifelse(hypermed_==1, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(dialysis_score = ifelse(dialysis_==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(fnstat_score = ifelse(fnstat_final==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(bleed_score = ifelse(bleed==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(ventilator_score = ifelse(ventilator==1, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(sepsis_score = ifelse(sepsis==1, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(ascites_score = ifelse(ascites_==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(laparoscopic_score = ifelse(laparoscopic==0, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(proc_score = ifelse(high_risk_proc==1, 3, 0))
+test_clean_score <- test_clean_score %>% mutate(sodium_score = ifelse(sodium_low==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(creat_score = ifelse(creat_high==1, 2, 0))
+test_clean_score <- test_clean_score %>% mutate(albumin_score = ifelse(albumin_high==0, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(alk_score = ifelse(alk_high==1, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(plate_score = ifelse(plate_high==0, 1, 0))
+test_clean_score <- test_clean_score %>% mutate(risk_score = male_score + age_score + low_bmi_score + diabetes_score + smoker_score + copd_score +
+                                                    chf_score + hypermed_score + dialysis_score + fnstat_score + bleed_score + ventilator_score + 
+                                                    sepsis_score + ascites_score + laparoscopic_score + proc_score + sodium_score + creat_score +
+                                                    albumin_score + alk_score + plate_score)
+
+freq(test_clean_score$risk_score)
+describe(test_clean_score$risk_score)
+
+# risk score continuous on test data
+test_mod_risk_score <- glm(MACE_b ~ risk_score, 
+                            data = test_clean_score, family = "binomial")
+summary(test_mod_risk_score)
+exp(cbind(OR = coef(test_mod_risk_score), confint(test_mod_risk_score)))
+
+predicted_probs_score_test <- predict(test_mod_risk_score, type = "response")
+
+roc_curve_score_test <- roc(test_mod_risk_score$MACE_b, predicted_probs_score_test)
+
+# Plot the ROC curve
+plot(roc_curve_score_test, main = "ROC Curve", col = "blue")
+
+# AUC with 95% Confidence Interval
+auc_value_score <- auc(roc_curve_score_test)
+ci_value_score <- ci.auc(roc_curve_score_test)
+
+# risk score categorical on test data
+train_clean_score <- train_clean_score %>% mutate(risk_category = case_when(
+  risk_score >= 0 & risk_score < 5 ~ 0,
+  risk_score >= 5 & risk_score < 9 ~ 1,
+  risk_socre >= 9 ~ 3,
+  TRUE ~ NA_real_))
+
+### then plug risk categories into logit model 
+test_mod_risk_score_cat <- glm(MACE_b ~ as.factor(risk_category), 
+                                data = test_mod_risk_score, family = "binomial")
+summary(test_mod_risk_score_cat)
+exp(cbind(OR = coef(test_mod_risk_score_cat), confint(test_mod_risk_score_cat)))
+
+predicted_probs_score_cat_test <- predict(test_mod_risk_score_cat, type = "response")
+
+roc_curve_score_cat_test <- roc(test_mod_risk_score_cat$MACE_b, predicted_probs_score_cat_test)
+
+# Plot the ROC curve
+plot(roc_curve_score_cat_test, main = "ROC Curve", col = "blue")
+
+# AUC with 95% Confidence Interval
+auc_value_score_cat_test <- auc(roc_curve_score_cat_test)
+ci_value_score_cat_test <- ci.auc(roc_curve_score_cat_test)
+
+# Print the AUC and its 95% CI
+print(paste("AUC: ", auc_value_score_cat_test))
+print(paste("95% CI: ", ci_value_score_cat_test))
