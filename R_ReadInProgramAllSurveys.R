@@ -51,6 +51,8 @@
 #           
 # *****************************************************************************************
 
+### citation for the below code: https://www.cdc.gov/nchs/data-linkage/mortality-public.htm
+
 
 #install.packages("readr")    #if package is not installed already, then uncomment and run this line
 #install.packages("dplyr")    #if package is not installed already, then uncomment and run this line
