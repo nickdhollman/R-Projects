@@ -1,0 +1,281 @@
+---
+title: "NIJ_Recidivism"
+author: "Nicholas Hollman"
+date: "2025-05-03"
+output: html_document
+---
+## Libraries used
+
+```{r load packages}
+library(tidyverse)
+library(psych)
+library(summarytools)
+library(gmodels)
+library(ggplot2)
+```
+
+## Import data 
+```{r setup}
+NIJ <- read_csv("C:\\Users\\nickd\\OneDrive\\RProj\\NIJ_s_Recidivism_Challenge_Full_Dataset_20250503.csv", show_col_types = TRUE)
+```
+
+## Summary of initial import 
+```{r}
+summary(NIJ)
+```
+
+# Summary of missing data 
+```{r}
+missing_counts <- colSums(is.na(NIJ))
+```
+
+```{r}
+missing_percents <- colMeans(is.na(NIJ)) * 100
+```
+
+
+```{r}
+missing_summary <- data.frame(
+  column = names(missing_counts),
+  missing_count = missing_counts,
+  missing_percent = missing_percents
+)
+```
+
+```{r}
+missing_summary %>%
+  arrange(desc(missing_percent))
+```
+
+
+```{r}
+
+```
+
+#Several variables in the dataset had more than 20% missing data. For the purposes of this portfolio project, listwise deletion was applied to simplify the analysis and ensure complete cases. However, in a real-world setting, I would collaborate with stakeholders and domain experts to assess the nature of the missingness and determine an appropriate imputation strategy based on analytic goals and the importance of each variable. Depending on the context, potential methods might include mean or median imputation for continuous variables, mode imputation for categorical variables, or more advanced techniques such as multiple imputation or predictive modeling.
+
+```{r}
+NIJ_clean <- NIJ %>% drop_na()
+```
+
+
+```{r}
+missing_counts_clean <- colSums(is.na(NIJ_clean))
+print(missing_counts_clean)
+```
+
+```{r}
+# drop other recidivism columns as these are all captured with our outcome of interest
+library(dplyr)
+NIJ_clean <- NIJ_clean %>% select(-Recidivism_Arrest_Year1, -Recidivism_Arrest_Year2, -Recidivism_Arrest_Year3)
+names(NIJ_clean)
+```
+
+```{r}
+NIJ_clean$Recidivism_Within_3years <- as.numeric(NIJ_clean$Recidivism_Within_3years)
+set.seed(123)
+library(caret)
+split <- createDataPartition(NIJ_clean$Recidivism_Within_3years, p = 0.7, list = FALSE)
+train_data <- NIJ_clean[split, ]
+test_data  <- NIJ_clean[-split, ]
+dfSummary(train_data)
+```
+
+
+```{r}
+# out of below output, Recidivism_Within_3years, ID, and training sample 
+train_data %>%
+  group_by(Recidivism_Within_3years) %>%
+  summarise(across(where(is.numeric), list(mean = mean, sd = sd), na.rm = TRUE))
+```
+
+
+```{r}
+dfSummary(train_data %>% select(Recidivism_Within_3years, where(is.factor), where(is.character)))
+```
+```{r}
+drop_cols <- grep("Recidivism_Arrest_Year", names(train_data), value = TRUE)
+train_data <- train_data %>% select(-all_of(drop_cols))
+test_data <- test_data %>% select(names(train_data))  # ensure matching structure
+# initially had error in below confirmed by summary statistics above, that some variables only have one level - dropping varaibles with only 1 level
+# Remove predictors with only one unique value
+train_data <- train_data %>% select(where(~ n_distinct(.) > 1))
+test_data <- test_data %>% select(names(train_data))  # keep same vars as training
+```
+
+# Import libraries needed for predictive modeling 
+```{r}
+library(caret)
+library(glmnet)
+library(pROC)
+library(broom)
+```
+
+
+# Prepare data for LASSO
+
+```{r}
+# Ensure Recidivism_Arrest_Year1-3 are dropped before modeling (in case they reappeared)
+drop_cols <- grep("Recidivism_Arrest_Year", names(train_data), value = TRUE)
+train_data <- train_data %>% select(-all_of(drop_cols))
+test_data <- test_data %>% select(names(train_data))  # ensure same structure
+train_data <- train_data %>% select(-Training_Sample, -ID)
+test_data  <- test_data %>% select(-Training_Sample, -ID)
+
+x_train <- model.matrix(Recidivism_Within_3years ~ ., data = train_data)[, -1]
+y_train <- train_data$Recidivism_Within_3years
+
+x_test  <- model.matrix(Recidivism_Within_3years ~ ., data = test_data)[, -1]
+y_test  <- test_data$Recidivism_Within_3years
+```
+
+# Cross-Validated LASSO Model
+# alpha = 1 = use LASSO penalty (vs. alpha = 0 for Ridge, or between 0–1 for Elastic Net).
+# nfolds = 5 = use 5-fold cross-validation (splits training data into 5 parts to evaluate performance).
+
+```{r}
+set.seed(123)
+```
+
+
+```{r}
+cv_fit <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 1, nfolds = 5)
+plot(cv_fit) # Plots the cross-validated deviance (loss) for each lambda. Vertical dashed lines: One for lambda.min (lambda with lowest error).One for lambda.1se (more regularized but within 1 standard error of the best). This helps visually pick a trade-off between model complexity and performance.
+best_lambda <- cv_fit$lambda.min 
+print(best_lambda)# Extracts the best lambda value (i.e., the one that minimizes cross-validation error). This value will be used to predict and interpret the final model.
+```
+
+## LASSO Coefficients
+```{r}
+lasso_coef <- coef(cv_fit, s = "lambda.min") # This line extracts the model coefficients at the optimal lambda value 
+lasso_coef_df <- as.data.frame(as.matrix(lasso_coef)) %>% #Converts the sparse matrix of coefficients into a regular data frame. 
+  rownames_to_column("feature") %>% # Adds the row names (which are the variable names, including the intercept) as a column called "feature".
+  mutate(coefficient = .[[1]]) %>% # Creates a new column called coefficient from the first (and only) column of the data frame.
+                                    # This is done because the original column had a non-descriptive name like s1.
+  filter(coefficient != 0)   # Filters the data to keep only non-zero coefficients.
+lasso_coef_df
+```
+
+
+```{r}
+pred_probs <- predict(cv_fit, newx = x_test, s = "lambda.min", type = "response")
+pred_class <- ifelse(pred_probs > 0.5, 1, 0)
+confusionMatrix(factor(pred_class), factor(y_test), positive = "1")
+```
+
+
+```{r}
+library(pROC)
+library(ggplot2)
+
+# Create ROC object
+roc_obj <- roc(y_test, as.vector(pred_probs), quiet = TRUE)
+
+# Create ROC plot with correct axis and diagonal
+ggplot(data = data.frame(
+  tpr = roc_obj$sensitivities,
+  fpr = 1 - roc_obj$specificities
+)) +
+  geom_line(aes(x = fpr, y = tpr), color = "black", size = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray60") +
+  labs(
+    title = paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")"),
+    x = "False Positive Rate (1 - Specificity)",
+    y = "True Positive Rate (Sensitivity)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+
+```
+## Refit Logistic Regression on Selected Variables
+
+```{r}
+# Drop ID and Training_Sample if they exist
+train_data_model <- train_data %>%
+  select(-any_of(c("ID", "Training_Sample")))
+
+x_train <- model.matrix(Recidivism_Within_3years ~ ., data = train_data_model)[, -1]
+y_train <- train_data_model$Recidivism_Within_3years
+
+selected_vars <- rownames(lasso_coef)[lasso_coef[, 1] != 0]
+selected_vars <- selected_vars[selected_vars != "(Intercept)"]
+
+x_refit <- x_train[, selected_vars]
+
+model_refit <- glm(y_train ~ ., data = as.data.frame(x_refit), family = binomial)
+
+summary(model_refit)
+```
+
+
+```{r}
+exp_coef <- exp(coef(model_refit))
+conf_int <- exp(confint(model_refit))
+odds_table <- cbind(OR = exp_coef, conf_int)
+colnames(odds_table) <- c("Odds Ratio", "2.5 %", "97.5 %")
+odds_table
+```
+```{r}
+# Extract non-zero coefficients at lambda.min
+lasso_coef <- coef(cv_fit, s = "lambda.min")
+lasso_coef_df <- as.data.frame(as.matrix(lasso_coef)) %>%
+  rownames_to_column("feature") %>%
+  rename(coefficient = 2) %>%
+  filter(coefficient != 0 & feature != "(Intercept)") %>%
+  arrange(desc(abs(coefficient)))
+```
+
+
+```{r}
+library(ggplot2)
+
+ggplot(lasso_coef_df, aes(x = reorder(feature, abs(coefficient)), y = coefficient)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "LASSO Feature Importance (lambda.min)",
+       x = "Feature", y = "Coefficient") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Get top 10 features by absolute value of coefficient (excluding intercept)
+top10_lasso <- lasso_coef_df %>%
+  arrange(desc(abs(coefficient))) %>%
+  slice(1:10) %>%
+  mutate(risk_direction = ifelse(coefficient > 0,
+                                 "Higher Risk of Recidivism",
+                                 "Lower Risk of Recidivism"))
+
+# Plot
+ggplot(top10_lasso, aes(x = reorder(feature, abs(coefficient)), y = coefficient, fill = risk_direction)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("Higher Risk of Recidivism" = "firebrick",
+                               "Lower Risk of Recidivism" = "steelblue")) +
+  labs(title = "Top 10 LASSO Features Associated with Recidivism",
+       x = "Feature", y = "LASSO Coefficient", fill = "Association") +
+  theme_minimal()
+
+```
+The larger the absolute value of a coefficient, the more influence that feature has on the predicted probability of the outcome (e.g., recidivism).
+
+A positive coefficient increases the log-odds (i.e., is associated with a higher likelihood of recidivism).
+
+A negative coefficient decreases the log-odds (i.e., is associated with a lower likelihood of recidivism).
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
