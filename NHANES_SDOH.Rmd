@@ -1,0 +1,881 @@
+---
+title: "Socioeconomic Determinants of Depression & Diabetes Using NHANES (2017–2020)"
+author: "Nick Hollman"
+date: "2025-05-05"
+output: html_document
+---
+
+Import libraries for analysis 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(haven) # to import SAS xpt files
+library(tidyverse)
+library(psych) # for describe function for continuous variable summary statistics
+library(summarytools) # freq function for categorical variable summary statistics
+library(gmodels) # CrossTable function for r*c crosstabulation 
+library(mice) # multiple imputation 
+```
+
+Load Datasets 
+```{r}
+setwd("C:\\Users\\nickd\\OneDrive\\RProj\\NHANES\\")
+demo <- read_xpt("P_DEMO.xpt")
+health_ins <- read_xpt("P_HIQ.xpt")
+food_sec <- read_xpt("P_FSQ.xpt")
+occupation <- read_xpt("P_OCQ.xpt")
+alcohol <- read_xpt("P_ALQ.xpt")
+smoke <- read_xpt("P_SMQ.xpt")
+sedentary <- read_xpt("P_PAQ.xpt")
+diabetes <- read_xpt("P_DIQ.xpt")
+depression <- read_xpt("P_DPQ.xpt")
+```
+
+Limit Data to only variables needed for analysis 
+```{r}
+demo_ <- demo %>% select(SEQN, RIAGENDR, RIDAGEYR, RIDRETH3, DMDEDUC2, INDFMPIR, DMDMARTZ, DMDBORN4, DMDYRUSZ)
+health_ins_ <- health_ins %>% select(SEQN, HIQ011)
+food_sec_ <- food_sec %>% select(SEQN, FSDHH)
+occupation_ <- occupation %>% select(SEQN, OCD150, OCQ180, OCQ210)
+alcohol_ <- alcohol %>% select(SEQN, ALQ111, ALQ121)
+smoke_ <- smoke %>% select(SEQN, SMQ020, SMQ040)
+sedentary_ <- sedentary %>% select(SEQN, PAD680)
+diabetes_ <- diabetes %>% select(SEQN, DIQ010)
+depression_ <- depression %>% select(SEQN, DPQ010, DPQ020, DPQ030, DPQ040, DPQ050, DPQ060, DPQ070, DPQ080, DPQ090)
+```
+
+Drop original datasets
+```{r}
+rm("alcohol", "demo", "depression", "diabetes", "food_sec", "health_ins", "occupation", "sedentary", "smoke")
+```
+
+Data prep (recoding of variables, etc.)
+```{r}
+freq(alcohol_$ALQ121)
+```
+
+Recode as follows to capture current drinker: IF ALQ121 >= 1 & <= 10 THEN Current_drink = 1,
+ELSE IF ALQ121==0 THEN Current_drink = 0,
+ELSE IF ALQ121==77 OR ALQ121==99 THEN Current_drink = missing
+ELSE Current_drink = missing
+```{r}
+alcohol_recode <- alcohol_ %>% mutate(Current_drink = case_when( 
+                                         ALQ121 >= 1 & ALQ121 <= 10 ~ 1,
+                                         ALQ121==0 ~ 0,
+                                         ALQ121==77 | ALQ121 ==99 ~ NA_real_,
+                                         TRUE ~ NA_real_))
+freq(alcohol_recode$Current_drink)
+```
+
+Do we need to recode gender? Yes, recategorize female to 0 opposed to 2 
+```{r}
+freq(demo_$RIAGENDR)
+demo_recode <- demo_ %>% mutate(gender = if_else(RIAGENDR==2, 0, 1))
+freq(demo_recode$gender)
+```
+
+Limit to age 20+ (I only want to analyze adults), adjust to categories due to NHANES setting upper limit of age to 80
+```{r}
+freq(demo_$RIDAGEYR)
+describe(demo_$RIDAGEYR)
+demo_adult <- demo_ %>% filter(RIDAGEYR >= 20)
+demo_recode_adult <- demo_recode %>% filter(RIDAGEYR >= 20)
+demo_recode_adult <- demo_recode_adult %>% mutate(age_cat = case_when( 
+                                         RIDAGEYR >= 20 & RIDAGEYR < 30 ~ 0,
+                                         RIDAGEYR >= 30 & RIDAGEYR < 40 ~ 1,
+                                         RIDAGEYR >= 40 & RIDAGEYR < 50 ~ 2,
+                                         RIDAGEYR >= 50 & RIDAGEYR < 60 ~ 3,
+                                         RIDAGEYR >= 60 & RIDAGEYR < 70 ~ 4,
+                                         RIDAGEYR >= 70 & RIDAGEYR <= 80 ~ 5))
+freq(demo_recode_adult$age_cat)
+```
+
+Do we need to recode race? No, all have over 400 observations
+```{r}
+freq(demo_recode_adult$RIDRETH3)
+```
+
+Do we need to recode education? Yes, recode 7 & 9 to missing
+```{r}
+freq(demo_recode_adult$DMDEDUC2)
+demo_recode_adult <- demo_recode_adult %>% mutate(educat = if_else(DMDEDUC2==7 | DMDEDUC2==9, NA_real_, DMDEDUC2))
+freq(demo_recode_adult$educat)
+```
+
+Bin poverty to income ratio - <= 1.30, 1.31–1.85, 1.86–3.5, and >3.5, <= 1.30 is indicative of potential eligibility for SNAP (https://doi.org/10.1093/ajcn/nqab113) - > 3.5 is the reference group
+```{r}
+freq(demo_recode_adult$INDFMPIR)
+describe(demo_recode_adult$INDFMPIR)
+demo_recode_adult <- demo_recode_adult %>% mutate(PIR_cat = case_when( 
+                                         INDFMPIR > 3.5 ~ 0,
+                                         INDFMPIR >= 1.86 & INDFMPIR <= 3.5 ~ 1,
+                                         INDFMPIR >= 1.31 & INDFMPIR <= 1.85 ~ 2,
+                                         INDFMPIR <= 1.30 ~ 3,
+                                         TRUE ~ NA_real_))
+freq(demo_recode_adult$PIR_cat)
+```
+
+Do we need to recode marital status? Yes, recode Refused or Don't know to missing
+```{r}
+freq(demo_recode_adult$DMDMARTZ)
+demo_recode_adult <- demo_recode_adult %>% mutate(Marriage = if_else(DMDMARTZ==77 | DMDMARTZ==99, NA_real_, DMDMARTZ))
+freq(demo_recode_adult$Marriage)
+```
+
+Do we need to recode US born? Yes, recode Refused or Don't know to missing, subtract 1 so US born is reference 0 vs born outside the US = 1
+```{r}
+freq(demo_recode_adult$DMDBORN4)
+demo_recode_adult <- demo_recode_adult %>% mutate(US_born = if_else(DMDBORN4==77 | DMDBORN4==99, NA_real_, DMDBORN4))
+demo_recode_adult <- demo_recode_adult %>% mutate(US_born = US_born - 1)
+freq(demo_recode_adult$US_born)
+```
+
+Do we need to recode number of years in the US? Recode 77 and 99 to missing
+```{r}
+freq(demo_recode_adult$DMDYRUSZ)
+describe(demo_recode_adult$DMDYRUSZ)
+demo_recode_adult <- demo_recode_adult %>% mutate(US_time = if_else(DMDYRUSZ==77 | DMDYRUSZ==99, NA_real_, DMDYRUSZ))
+freq(demo_recode_adult$US_time)
+```
+
+Initial depression screener responses
+```{r}
+freq(depression_$DPQ010)
+freq(depression_$DPQ020)
+freq(depression_$DPQ030)
+freq(depression_$DPQ040)
+freq(depression_$DPQ050)
+freq(depression_$DPQ060)
+freq(depression_$DPQ070)
+freq(depression_$DPQ080)
+freq(depression_$DPQ090)
+```
+
+Recode all depression screener responses of 7 or 9 to missing
+```{r}
+depression_recode <- depression_ %>% mutate(DPQ010 = if_else(DPQ010==7 | DPQ010==9, NA_real_, DPQ010))
+depression_recode <- depression_recode %>% mutate(DPQ020 = if_else(DPQ020==7 | DPQ020==9, NA_real_, DPQ020))
+depression_recode <- depression_recode %>% mutate(DPQ030 = if_else(DPQ030==7 | DPQ030==9, NA_real_, DPQ030))
+depression_recode <- depression_recode %>% mutate(DPQ040 = if_else(DPQ040==7 | DPQ040==9, NA_real_, DPQ040))
+depression_recode <- depression_recode %>% mutate(DPQ050 = if_else(DPQ050==7 | DPQ050==9, NA_real_, DPQ050))
+depression_recode <- depression_recode %>% mutate(DPQ060 = if_else(DPQ060==7 | DPQ060==9, NA_real_, DPQ060))
+depression_recode <- depression_recode %>% mutate(DPQ070 = if_else(DPQ070==7 | DPQ070==9, NA_real_, DPQ070))
+depression_recode <- depression_recode %>% mutate(DPQ080 = if_else(DPQ080==7 | DPQ080==9, NA_real_, DPQ080))
+depression_recode <- depression_recode %>% mutate(DPQ090 = if_else(DPQ090==7 | DPQ090==9, NA_real_, DPQ090))
+freq(depression_recode$DPQ010)
+freq(depression_recode$DPQ020)
+freq(depression_recode$DPQ030)
+freq(depression_recode$DPQ040)
+freq(depression_recode$DPQ050)
+freq(depression_recode$DPQ060)
+freq(depression_recode$DPQ070)
+freq(depression_recode$DPQ080)
+freq(depression_recode$DPQ090)
+```
+
+Create PHQ9 score
+```{r}
+depression_recode <- depression_recode %>% mutate(PHQ9 = DPQ010 + DPQ020 + DPQ030 + DPQ040 + DPQ050 + DPQ060 + DPQ070 + DPQ080 + DPQ090)
+freq(depression_recode$PHQ9)
+describe(depression_recode$PHQ9)
+```
+Create depression outcome (1 = Yes, 0 = No), code Yes or Borderline as Yes, recode don't know to missing
+```{r}
+freq(diabetes_$DIQ010)
+diabetes_recode <- diabetes_ %>% mutate(DIQ010 = if_else(DIQ010==9, NA_real_, DIQ010))
+diabetes_recode <- diabetes_recode %>% mutate(diabetes = case_when( 
+                                         DIQ010 == 2 ~ 0,
+                                         DIQ010 == 1 | DIQ010 == 3 ~ 1,
+                                         TRUE ~ NA_real_))
+freq(diabetes_recode$diabetes)
+```
+Do we need to recode food security? No
+```{r}
+freq(food_sec_$FSDHH)
+```
+Do we need to recode health_ins_? Recode 7 and 9 to missing, recode 1 (yes) to 0 and 2 (no) to 1
+```{r}
+freq(health_ins_$HIQ011)
+health_ins_recode <- health_ins_ %>% mutate(HIQ011 = if_else(HIQ011==7 | HIQ011==9, NA_real_, HIQ011))
+health_ins_recode <- health_ins_recode %>% mutate(No_insurance = HIQ011 - 1)
+freq(health_ins_recode$HIQ011)
+freq(health_ins_recode$No_insurance)
+```
+
+Create occupation category with the following logic to code current full time job:
+IF OCD150 = 1 & OCQ180 >= 35 & OCQ180 <= 80 THEN Current_job = 1
+ELSE IF OCD150 = 2 & OCQ210 = 1 THEN Current_job = 1
+ELSE IF OCD150 = 3 OR OCD150 = 4 THEN Current_job = 0
+ELSE IF OCD150 = 7 OR OCD150 = 9 THEN Current_job = missing
+```{r}
+freq(occupation_$OCD150)
+freq(occupation_$OCQ180)
+freq(occupation_$OCQ210)
+occupation_recode <- occupation_ %>% mutate(current_job = case_when( 
+                                         OCD150 == 1 & OCQ180 >= 35 & OCQ180 <= 80 ~ 1,
+                                         OCD150 == 2 & OCQ210 == 1 ~ 1,
+                                         OCD150 == 3 | OCD150 == 4 ~ 0,
+                                         OCD150 == 7 | OCD150 == 9 ~ NA_real_))
+freq(occupation_recode$current_job)
+```
+
+Do we need any recoding for sedentary activity? 24hr * 60 = 1,440 (none more than this)
+Recode 7777 (Refused) and 9999 (Don't know) to missing
+```{r}
+freq(sedentary_$PAD680)
+sedentary_recode <- sedentary_ %>% mutate(PAD680 = if_else(PAD680==7777 | PAD680==9999, NA_real_, PAD680))
+freq(sedentary_recode$PAD680)
+```
+
+Create high sedentary activity risk factor (https://doi.org/10.1016/S0140-6736(16)30370-1)
+```{r}
+sedentary_recode <- sedentary_recode %>%
+  mutate(sedentary_risk = case_when(
+    PAD680 >= 480 ~ 1,       # High sedentary
+    PAD680 < 480 ~ 0,        # Lower sedentary
+    TRUE ~ NA_real_
+  ))
+freq(sedentary_recode$sedentary_risk)
+```
+Create current smoker variable with the folliwng logic:
+IF SMQ020 = 1 (yes lifetime) & SMQ040 = 1 (every day) OR SQM040 = 2 (some days) to 1 for current smoker
+ELSE IF SMQ020 = 1 & SMQ040 = 3 (Not at all) THEN 0 for current smoker
+ELSE IF SMQ020 = 2 (No lifetime) THEN 0 for current smoker
+ELSE current smoker = missing
+```{r}
+freq(smoke_$SMQ020)
+freq(smoke_$SMQ040)
+smoke_recode <- smoke_ %>%
+  mutate(current_smoke = case_when(
+    SMQ020 == 1 & (SMQ040 == 1 | SMQ040 == 2) ~ 1,
+    SMQ020 == 1 & SMQ040 == 3 ~ 0,  
+    SMQ020 == 2 ~ 0,
+    TRUE ~ NA_real_
+  ))
+freq(smoke_recode$current_smoke)
+```
+
+Merge recoded datasets for master NHANES flat file by SEQN
+```{r}
+nhanes <- reduce(list(alcohol_recode, demo_recode_adult, depression_recode, diabetes_recode, food_sec_, health_ins_recode,
+                      occupation_recode, sedentary_recode, smoke_recode), inner_join, by = "SEQN")
+```
+
+Limit dataset to only variables I will use in the final analysis
+```{r}
+nhanes_ <- nhanes %>% select(SEQN, Current_drink, gender, age_cat, RIDRETH3, educat, PIR_cat, Marriage, US_born, US_time, PHQ9, diabetes,
+                             FSDHH, No_insurance, current_job, sedentary_risk, current_smoke)
+```
+
+Create summary statistics on original dataframe
+```{r}
+freq(nhanes_$Current_drink)
+freq(nhanes_$gender)
+freq(nhanes_$age_cat)
+freq(nhanes_$RIDRETH3)
+freq(nhanes_$educat)
+freq(nhanes_$PIR_cat)
+freq(nhanes_$Marriage)
+freq(nhanes_$US_born)
+freq(nhanes_$US_time)
+freq(nhanes_$diabetes)
+freq(nhanes_$FSDHH)
+freq(nhanes_$No_insurance)
+freq(nhanes_$current_job)
+freq(nhanes_$sedentary_risk)
+freq(nhanes_$current_smoke)
+describe(nhanes_$PHQ9)
+```
+
+Is PHQ-9 Normally distributed?
+```{r}
+ggplot(nhanes_, aes(sample = PHQ9)) +
+  stat_qq() +
+  stat_qq_line(color = "red", size = 1) +
+  labs(title = "QQ Plot", x = "Theoretical Quantiles", y = "Sample Quantiles for PHQ9") +
+  theme_minimal()
+```
+Try squre root transformation & replot data
+```{r}
+nhanes_ <- nhanes_ %>%
+  mutate(PHQ9_sqrt = sqrt(PHQ9))
+ggplot(nhanes_, aes(sample = PHQ9_sqrt)) +
+  stat_qq() +
+  stat_qq_line(color = "red", size = 1) +
+  labs(title = "QQ Plot", x = "Theoretical Quantiles", y = "Sample Quantiles for sqrt(PHQ9)") +
+  theme_minimal()
+```
+Try log transformation & replot data (add 1 to handle zero values)
+```{r}
+nhanes_ <- nhanes_ %>%
+  mutate(PHQ9_log = log(PHQ9 + 1))  # +1 to handle zero values
+ggplot(nhanes_, aes(sample = PHQ9_log)) +
+  stat_qq() +
+  stat_qq_line(color = "red", size = 1) +
+  labs(title = "QQ Plot", x = "Theoretical Quantiles", y = "Sample Quantiles for log(PHQ9 + 1)") +
+  theme_minimal()
+```
+Due to poor distribution above, it would be better to treat depression as categorical - a cut-off of 10 was used (https://doi.org/10.1503/cmaj.110829)
+```{r}
+nhanes_ <- nhanes_ %>%
+  mutate(PHQ9_binary = case_when(
+    PHQ9 >= 10 ~ 1,
+    PHQ9 < 10 ~ 0,
+    TRUE ~ NA_real_
+  ))
+freq(nhanes_$PHQ9_binary)
+```
+Drop PHQ9 variables not used
+```{r}
+nhanes_ <- nhanes_ %>% select(-c(PHQ9_sqrt, PHQ9_log))
+```
+
+Export nhanes & nhanes_ for use later if needed (Tableau, etc.)
+```{r}
+write.csv(nhanes_, "nhanes_.csv", row.names = FALSE)
+write.csv(nhanes, "nhanes_all_variables.csv", row.names = FALSE)
+```
+
+Keep only dataframes I want to use moving forward
+```{r}
+rm(list = setdiff(ls(), c("nhanes_", "nhanes")))
+```
+
+I also want to drop US_time due to high amount of missing data
+```{r}
+nhanes_ <- nhanes_ %>% select(-c(US_time))
+```
+
+Create train/test split for data
+```{r}
+set.seed(123)  # for reproducibility
+
+# 70% training, 30% test
+train_index <- sample(nrow(nhanes_), size = 0.7 * nrow(nhanes_))
+train_data <- nhanes_[train_index, ]
+test_data  <- nhanes_[-train_index, ]
+```
+
+
+Run regression model for Depression (Logit) w/o imputation 
+```{r}
+depression_mod <- glm(PHQ9_binary ~ Current_drink + gender + as.factor(age_cat) + as.factor(RIDRETH3) + as.factor(educat) + as.factor(PIR_cat) + as.factor(Marriage) + US_born + as.factor(FSDHH) + No_insurance + current_job + sedentary_risk + current_smoke, 
+             data = train_data, 
+             family = binomial)
+```
+
+Get summary of model w/ coefficients, p-values, and odds ratios w/ 95% CI
+```{r}
+summary(depression_mod)           # Coefficients, p-values
+#exp(coef(depression_mod))         # Odds ratios
+#exp(confint(depression_mod))      # Confidence intervals for odds ratios
+```
+
+Test model for multicollinearity - no values above 5
+```{r}
+library(car)
+vif(depression_mod)
+```
+Generate predicted probabilities on the test data & roc_obj along w/ AUC
+```{r}
+library(pROC)
+test_data$predicted_prob <- predict(depression_mod, newdata = test_data, type = "response")
+roc_obj <- roc(test_data$PHQ9_binary, test_data$predicted_prob)
+auc(roc_obj)
+```
+
+Get ROC - not great prediction, this makes sense due to lack of significant coefficients
+```{r}
+roc_df <- data.frame(
+  specificity = roc_obj$specificities,
+  sensitivity = roc_obj$sensitivities,
+  fpr = 1 - roc_obj$specificities
+)
+
+# Plot
+ggplot(roc_df, aes(x = fpr, y = sensitivity)) +
+  geom_line(color = "blue", size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  labs(title = "ROC Curve (Depression Model) - Test Data",
+       x = "1 - Specificity (False Positive Rate)",
+       y = "Sensitivity (True Positive Rate)") +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal()
+```
+
+
+Run regression model for Depression (Logit) w/o imputation using LASSO regularization
+```{r}
+library(glmnet)
+model_vars <- c("PHQ9_binary", "Current_drink", "gender", "age_cat", "RIDRETH3", 
+                "educat", "PIR_cat", "Marriage", "US_born", "FSDHH", "No_insurance", 
+                "current_job", "sedentary_risk", "current_smoke")
+
+train_complete <- train_data %>%
+  select(all_of(model_vars)) %>%
+  drop_na()
+
+lasso_formula <- PHQ9_binary ~ Current_drink + gender + as.factor(age_cat) + 
+                  as.factor(RIDRETH3) + as.factor(educat) + 
+                  as.factor(PIR_cat) + as.factor(Marriage) + 
+                  US_born + as.factor(FSDHH) + 
+                  No_insurance + current_job + sedentary_risk + 
+                  current_smoke
+
+# Create predictor matrix (excluding the outcome), automatically handles factors
+x_train <- model.matrix(lasso_formula, data = train_complete)[, -1]
+train_cols <- colnames(x_train)
+
+
+# Create outcome vector
+y <- train_complete$PHQ9_binary
+```
+
+Below code is applying k-fold cross-validation (with default of 10-folds) within training data to find the best λ (penalty strength) that minimizes error
+```{r}
+set.seed(123)
+cv_lasso <- cv.glmnet(x_train, y, alpha = 1, family = "binomial", type.measure = "class")
+```
+
+Identify variables selected from LASSO regularization
+```{r}
+# Extract coefficients as sparse matrix
+lasso_coef <- coef(cv_lasso, s = cv_lasso$lambda.min)
+
+# Convert to a tidy tibble (rename properly)
+library(tibble)
+
+lasso_vars <- as_tibble(as.matrix(lasso_coef), rownames = "Variable") %>%
+  rename(Coefficient = `s1`) %>%  # 's1' is often the auto-assigned column name
+  filter(Coefficient != 0)
+
+
+# View selected variables
+print(lasso_vars)
+```
+
+Get complete data for test data
+```{r}
+# Drop NAs in all relevant variables
+test_complete <- test_data %>%
+  select(all.vars(lasso_formula)) %>%
+  drop_na()
+
+# Create model matrix for test set
+x_test <- model.matrix(lasso_formula, data = test_complete)[, -1]
+
+# Add any missing columns with 0s
+missing_cols <- setdiff(train_cols, colnames(x_test))
+for (col in missing_cols) {
+  x_test <- cbind(x_test, setNames(data.frame(0), col))
+}
+
+# Reorder columns to match training
+x_test <- x_test[, train_cols]
+y_test <- test_complete$PHQ9_binary
+```
+
+
+Compare AUC for LASSO compared to original full model
+```{r}
+library(pROC)
+
+# generate predicted prob for LASSO model
+lasso_pred_prob <- predict(cv_lasso, newx = x_test, s = cv_lasso$lambda.min, type = "response")
+
+# AUC for LASSO
+lasso_roc <- roc(y_test, as.vector(lasso_pred_prob))
+lasso_auc <- auc(lasso_roc)
+
+# AUC for standard GLM
+glm_roc <- roc(test_data$PHQ9_binary, test_data$predicted_prob)
+glm_auc <- auc(glm_roc)
+
+# Print both
+cat("LASSO AUC:", lasso_auc, "\n")
+cat("GLM AUC:", glm_auc, "\n")
+
+```
+Plot ROC Curve for both models (base R)
+```{r}
+plot(glm_roc, 
+     col = "blue", 
+     main = "ROC: GLM vs. LASSO")  # Flips x-axis to 0 → 1
+
+# Add LASSO ROC curve
+lines(lasso_roc, col = "red")
+
+# Add legend
+legend("bottomright", 
+       legend = c("GLM", "LASSO"),
+       col = c("blue", "red"), 
+       lwd = 2)
+```
+
+Plot ROC Curves for both models  (better curve)
+```{r}
+
+# Create data frames from both ROC objects
+glm_df <- data.frame(
+  fpr = 1 - glm_roc$specificities,
+  tpr = glm_roc$sensitivities,
+  model = "GLM"
+)
+
+lasso_df <- data.frame(
+  fpr = 1 - lasso_roc$specificities,
+  tpr = lasso_roc$sensitivities,
+  model = "LASSO"
+)
+
+# Combine for plotting
+roc_df <- rbind(glm_df, lasso_df)
+
+# Plot ROC curves with ggplot2
+ggplot(roc_df, aes(x = fpr, y = tpr, color = model)) +
+  geom_line(size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "1 - Specificity", limits = c(0, 1)) +
+  scale_y_continuous(name = "Sensitivity", limits = c(0, 1)) +
+  labs(title = "ROC Curve: GLM vs. LASSO for Depression") +
+  theme_minimal()
+
+```
+Repeat process above for diabetes instead of depression
+
+```{r}
+diabetes_mod <- glm(diabetes ~ Current_drink + gender + as.factor(age_cat) + as.factor(RIDRETH3) + as.factor(educat) + as.factor(PIR_cat) + as.factor(Marriage) + US_born + as.factor(FSDHH) + No_insurance + current_job + sedentary_risk + current_smoke, 
+             data = train_data, 
+             family = binomial)
+```
+
+Get summary of diabetes model above - this model seems to have better predictors from p-values 
+```{r}
+summary(diabetes_mod)           # Coefficients, p-values
+#exp(coef(diabetes_mod))         # Odds ratios
+#exp(confint(diabetes_mod))      # Confidence intervals for odds ratios
+```
+
+Test for multicollinearity in model - no values 5 or greater
+```{r}
+vif(diabetes_mod)
+```
+Generate predicted probabilities on test data
+```{r}
+test_data$predicted_prob_b <- predict(diabetes_mod, newdata = test_data, type = "response")
+roc_obj_b <- roc(test_data$diabetes, test_data$predicted_prob_b)
+auc(roc_obj_b)
+```
+
+Generate ROC Curve - a little better predictive accuracy than depression
+```{r}
+roc_df_b <- data.frame(
+  specificity = roc_obj_b$specificities,
+  sensitivity = roc_obj_b$sensitivities,
+  fpr = 1 - roc_obj_b$specificities
+)
+
+# Plot
+ggplot(roc_df_b, aes(x = fpr, y = sensitivity)) +
+  geom_line(color = "blue", size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  labs(title = "ROC Curve (Diabetes Model) - Test Data",
+       x = "1 - Specificity (False Positive Rate)",
+       y = "Sensitivity (True Positive Rate)") +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal()
+```
+Create LASSO model for diabetes
+```{r}
+model_vars_b <- c("diabetes", "Current_drink", "gender", "age_cat", "RIDRETH3", 
+                "educat", "PIR_cat", "Marriage", "US_born", "FSDHH", "No_insurance", 
+                "current_job", "sedentary_risk", "current_smoke")
+
+train_complete_b <- train_data %>%
+  select(all_of(model_vars_b)) %>%
+  drop_na()
+
+lasso_formula_b <- diabetes ~ Current_drink + gender + as.factor(age_cat) + 
+                  as.factor(RIDRETH3) + as.factor(educat) + 
+                  as.factor(PIR_cat) + as.factor(Marriage) + 
+                  US_born + as.factor(FSDHH) + 
+                  No_insurance + current_job + sedentary_risk + 
+                  current_smoke
+
+# Create predictor matrix (excluding the outcome), automatically handles factors
+x_train_b <- model.matrix(lasso_formula_b, data = train_complete_b)[, -1]
+train_cols_b <- colnames(x_train_b)
+
+
+# Create outcome vector
+y_b <- train_complete_b$diabetes
+```
+
+Below code is applying k-fold cross-validation (with default of 10-folds) within training data to find the best λ (penalty strength) that minimizes error
+```{r}
+set.seed(123)
+cv_lasso_b <- cv.glmnet(x_train_b, y_b, alpha = 1, family = "binomial", type.measure = "class")
+```
+
+Identify variables selected from LASSO regularization
+```{r}
+# Extract coefficients as sparse matrix
+lasso_coef_b <- coef(cv_lasso_b, s = cv_lasso_b$lambda.min)
+
+# Convert to a tidy tibble (rename properly)
+library(tibble)
+
+lasso_vars_b <- as_tibble(as.matrix(lasso_coef_b), rownames = "Variable") %>%
+  rename(Coefficient = `s1`) %>%  # 's1' is often the auto-assigned column name
+  filter(Coefficient != 0)
+
+
+# View selected variables
+print(lasso_vars_b)
+```
+Get complete data for test data
+```{r}
+# Drop NAs in all relevant variables
+test_complete_b <- test_data %>%
+  select(all.vars(lasso_formula_b)) %>%
+  drop_na()
+
+# Create model matrix for test set
+x_test_b <- model.matrix(lasso_formula_b, data = test_complete_b)[, -1]
+
+# Add any missing columns with 0s
+missing_cols_b <- setdiff(train_cols_b, colnames(x_test_b))
+for (col in missing_cols_b) {
+  x_test_b <- cbind(x_test_b, setNames(data.frame(0), col))
+}
+
+# Reorder columns to match training
+x_test_b <- x_test_b[, train_cols_b]
+y_test_b <- test_complete_b$diabetes
+```
+
+Compare AUC for LASSO compared to original full model - not a huge difference in LASSO vs full model
+```{r}
+# generate predicted prob for LASSO model
+lasso_pred_prob_b <- predict(cv_lasso_b, newx = x_test_b, s = cv_lasso_b$lambda.min, type = "response")
+
+# AUC for LASSO
+lasso_roc_b <- roc(y_test_b, as.vector(lasso_pred_prob_b))
+lasso_auc_b <- auc(lasso_roc_b)
+
+# AUC for standard GLM
+glm_roc_b <- roc(test_data$diabetes, test_data$predicted_prob_b)
+glm_auc_b <- auc(glm_roc_b)
+
+# Print both
+cat("LASSO AUC:", lasso_auc_b, "\n")
+cat("GLM AUC:", glm_auc_b, "\n")
+```
+Compare ROC curves for LASS vs GLM full model
+```{r}
+# Create data frames from both ROC objects
+glm_df_b <- data.frame(
+  fpr = 1 - glm_roc_b$specificities,
+  tpr = glm_roc_b$sensitivities,
+  model = "GLM"
+)
+
+lasso_df_b <- data.frame(
+  fpr = 1 - lasso_roc_b$specificities,
+  tpr = lasso_roc_b$sensitivities,
+  model = "LASSO"
+)
+
+# Combine for plotting
+roc_df_b <- rbind(glm_df_b, lasso_df_b)
+
+# Plot ROC curves with ggplot2
+ggplot(roc_df_b, aes(x = fpr, y = tpr, color = model)) +
+  geom_line(size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_x_continuous(name = "1 - Specificity", limits = c(0, 1)) +
+  scale_y_continuous(name = "Sensitivity", limits = c(0, 1)) +
+  labs(title = "ROC Curve: GLM vs. LASSO for Diabetes") +
+  theme_minimal()
+```
+
+Run regression model for models above with multiple imputation for diabetes
+```{r}
+library(mice)
+
+model_vars_b <- c("diabetes", "Current_drink", "gender", "age_cat", "RIDRETH3", 
+                  "educat", "PIR_cat", "Marriage", "US_born", "FSDHH", 
+                  "No_insurance", "current_job", "sedentary_risk", "current_smoke")
+
+# Subset and run mice
+impute_data <- train_data %>%
+  select(all_of(model_vars_b))
+
+#m=5 is specifying we are creating 5 imputed datasets - methd = pmm is stating to use Predictive Mean Matching for imputation (default)
+imp_b <- mice(impute_data, m = 5, method = "pmm", seed = 2024)
+```
+Run GLM on imputed data
+```{r}
+diabetes_mod_imp <- with(imp_b, glm(diabetes ~ Current_drink + gender + as.factor(age_cat) +
+                                  as.factor(RIDRETH3) + as.factor(educat) + as.factor(PIR_cat) +
+                                  as.factor(Marriage) + US_born + as.factor(FSDHH) + 
+                                  No_insurance + current_job + sedentary_risk + current_smoke,
+                                family = binomial))
+options(scipen = 999)  
+# Pool results across imputations
+pooled_diabetes_mod <- pool(diabetes_mod_imp)
+summary(pooled_diabetes_mod) 
+```
+Generate OR & 95% CI
+```{r}
+library(dplyr)
+
+# Extract summary and ensure it's a proper data frame
+mod_df <- as.data.frame(summary(pooled_diabetes_mod))
+
+# Add ORs, 95% CIs, and round everything to 4 decimals
+mod_df <- mod_df %>%
+  mutate(
+    OR = round(exp(estimate), 4),
+    lower_CI = round(exp(estimate - 1.96 * std.error), 4),
+    upper_CI = round(exp(estimate + 1.96 * std.error), 4),
+    estimate = round(estimate, 4),
+    std.error = round(std.error, 4),
+    p.value = round(p.value, 4)
+  )
+
+mod_df_sig <- mod_df %>%
+  filter(p.value < 0.05)
+
+# View the result
+print(mod_df_sig)
+
+# View clean output
+print(mod_df)
+
+```
+
+
+```{r pressure, echo=FALSE}
+library(knitr)
+library(kableExtra)
+mod_df_sig %>%
+  select(term, estimate, std.error, OR, lower_CI, upper_CI, p.value) %>%
+  kable(digits = 4, caption = "Significant Predictors from Pooled Logistic Regression",
+        col.names = c("Variable", "Estimate", "Std. Error", "OR", "95% CI (Lower)", "95% CI (Upper)", "P-Value")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+```
+
+Generate ROC/AUC curve
+```{r}
+# Extract 1 completed dataset from imputation
+comp_diab <- complete(imp_b, 1)  
+
+# Step 2: Refit logistic model on completed dataset
+glm_diab <- glm(diabetes ~ Current_drink + gender + as.factor(age_cat) + 
+                  as.factor(RIDRETH3) + as.factor(educat) + as.factor(PIR_cat) +
+                  as.factor(Marriage) + US_born + as.factor(FSDHH) +
+                  No_insurance + current_job + sedentary_risk + current_smoke,
+                data = comp_diab, family = binomial)
+
+# Step 3: Predict probabilities
+diab_pred <- predict(glm_diab, type = "response")
+
+# Step 4: Compute ROC and AUC
+roc_obj_diab_imp <- roc(comp_diab$diabetes, diab_pred)
+
+# Step 5: Plot ROC curve
+plot(roc_obj_diab_imp, legacy.axes = TRUE, col = "darkgreen", main = "ROC Curve: Imputed Diabetes Model")
+
+# Step 6: Print AUC
+auc(roc_obj_diab_imp)
+
+```
+
+
+Repeat process of imputation with depression model
+```{r}
+# Select variables for imputation
+model_vars_dep <- c("PHQ9_binary", "Current_drink", "gender", "age_cat", "RIDRETH3", 
+                    "educat", "PIR_cat", "Marriage", "US_born", "FSDHH", 
+                    "No_insurance", "current_job", "sedentary_risk", "current_smoke")
+
+# Subset data and run multiple imputation
+impute_data_dep <- train_data %>%
+  select(all_of(model_vars_dep))
+
+imp_dep <- mice(impute_data_dep, m = 5, method = "pmm", seed = 2024)
+
+```
+
+Fit logistic regression model & pool results
+```{r}
+# Fit logistic regression model on imputed datasets
+depression_mod_imp <- with(imp_dep, glm(PHQ9_binary ~ Current_drink + gender + 
+                                        as.factor(age_cat) + as.factor(RIDRETH3) +
+                                        as.factor(educat) + as.factor(PIR_cat) +
+                                        as.factor(Marriage) + US_born + 
+                                        as.factor(FSDHH) + No_insurance + 
+                                        current_job + sedentary_risk + current_smoke,
+                                        family = binomial))
+
+# Pool results
+pooled_depression_mod <- pool(depression_mod_imp)
+```
+
+Summarize results
+```{r}
+# Format output with ORs and 95% CI
+dep_df <- as.data.frame(summary(pooled_depression_mod))
+
+# Calculate odds ratios and CIs
+dep_df <- dep_df %>%
+  mutate(
+    OR        = round(exp(estimate), 4),
+    lower_CI  = round(exp(estimate - 1.96 * std.error), 4),
+    upper_CI  = round(exp(estimate + 1.96 * std.error), 4),
+    estimate  = round(estimate, 4),
+    std.error = round(std.error, 4),
+    p.value   = round(p.value, 4)
+  )
+
+# Filter for statistically significant predictors
+dep_df_sig <- dep_df %>%
+  filter(p.value < 0.05)
+```
+
+Aesthetically pleasing printout
+```{r depression-table, results='asis'}
+dep_df_sig %>%
+  select(term, OR, lower_CI, upper_CI, std.error, p.value) %>%
+  kable(digits = 4, caption = "Significant Predictors from Pooled Depression Model",
+        col.names = c("Variable", "OR", "95% CI (Lower)", "95% CI (Upper)", "Std. Error", "P-Value")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE)
+```
+
+ROC Curve
+```{r}
+# Use one completed dataset for evaluation
+comp_dep <- complete(imp_dep, 1)
+
+# Refit model on this for predictions
+glm_dep <- glm(PHQ9_binary ~ Current_drink + gender + as.factor(age_cat) +
+                  as.factor(RIDRETH3) + as.factor(educat) + as.factor(PIR_cat) +
+                  as.factor(Marriage) + US_born + as.factor(FSDHH) +
+                  No_insurance + current_job + sedentary_risk + current_smoke,
+                data = comp_dep, family = binomial)
+
+# Predict probabilities
+dep_pred <- predict(glm_dep, type = "response")
+
+# ROC and AUC
+roc_obj_dep_imp <- roc(comp_dep$PHQ9_binary, dep_pred)
+plot(roc_obj_dep_imp, legacy.axes = TRUE, col = "blue", main = "ROC Curve: Imputed Depression Model")
+auc(roc_obj_dep_imp)
+```
+
+
+
+
+
