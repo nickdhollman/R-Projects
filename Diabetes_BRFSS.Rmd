@@ -1,0 +1,868 @@
+---
+title: "Diabetes Health Indicators Analysis"
+author: "Nick"
+date: "2025-06-18"
+output: html_document
+---
+Import libraries for analysis 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+lapply(
+  c('tidyr' ,'dplyr','ddpcr', 'ggplot2', 'ggrepel', 'knitr', 'gridExtra', 'ggthemes',
+    'readr', 'quanteda', 'tm', 'xtable', 'scales', 'magrittr', 'caret', 'summarytools', 'GGally', 'gtsummary', 'abess', 'glmnet','PRROC',
+    'pROC', 'xgboost', 'e1071', 'randomForest', 'class'), 
+  require, 
+  character.only = TRUE
+  )
+```
+
+Set Working Directory & Load Diabetes Dataset: Clean BRFSS Data Source Found on Kaggle from Alex Teboul (data set utilized is diabetes_binary_health_indicators_BRFSS2015) https://www.kaggle.com/datasets/alexteboul/diabetes-health-indicators-dataset?select=diabetes_binary_health_indicators_BRFSS2015.csv
+Original 2015 Survey Data:
+https://www.cdc.gov/brfss/annual_data/annual_2015.html
+
+```{r echo=FALSE eval = FALSE}
+# echo=FALSE prevents the code from displaying, eval = FALSE prevents the code from being executed when knitting 
+setwd("C:/Users/nickd/OneDrive/RProj/BRFSS")
+df <- read_csv("diabetes_binary_health_indicators_BRFSS2015.csv")
+```
+
+Establish factor variables 
+Continuous variables: Age category (13 levels - treat as continuous), PysHlth (phyiscal activity in last 30 days), MentHlth (poor mental health in last 30 days), BMI (body mass index)
+```{r eval = FALSE}
+df$Diabetes_binary <- factor(df$Diabetes_binary)
+df$HighBP <- factor(df$HighBP)
+df$HighChol <- factor(df$HighChol)
+df$CholCheck <- factor(df$CholCheck)
+df$Smoker <- factor(df$Smoker)
+df$Stroke <- factor(df$Stroke)
+df$HeartDiseaseorAttack <- factor(df$HeartDiseaseorAttack)
+df$PhysActivity <- factor(df$PhysActivity)
+df$Fruits <- factor(df$Fruits)
+df$Veggies <- factor(df$Veggies)
+df$HvyAlcoholConsump <- factor(df$HvyAlcoholConsump)
+df$AnyHealthcare <- factor(df$AnyHealthcare)
+df$NoDocbcCost <- factor(df$NoDocbcCost)
+df$GenHlth <- factor(df$GenHlth)
+df$DiffWalk <- factor(df$DiffWalk)
+df$Sex <- factor(df$Sex)
+df$Education <- factor(df$Education)
+df$Income <- factor(df$Income)
+```
+
+Split the data into train & test by stratified sampling of our outcome (Diabetes_binary) (hold out test for final evaluation)
+```{r eval = FALSE}
+set.seed(12345)
+train_index <- createDataPartition(df$Diabetes_binary, p = 0.7, list = FALSE)
+df_train <- df[train_index, ]
+df_test <- df[-train_index, ]
+```
+
+Summary statistics for outcome
+```{r eval = FALSE}
+df_train %>%
+  count(Diabetes_binary) %>%
+  mutate(percentage = n / sum(n)) %>%
+  print()
+
+df_test %>%
+  count(Diabetes_binary) %>%
+  mutate(percentage = n / sum(n)) %>%
+  print()
+```
+
+Get summary statistics for the dataset
+```{r eval = FALSE}
+dfSummary(df_train)
+```
+
+Get initial plots for data
+```{r eval = FALSE}
+factor_vars <- names(df_train)[sapply(df_train, is.factor)]
+continuous_vars <- names(df_train)[sapply(df_train, is.numeric)]
+
+# Loop through continuous variables
+for (var in continuous_vars) {
+  print(
+    ggplot(df_train, aes_string(x = var)) +
+      geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+      labs(title = paste("Histogram of", var), x = var, y = "Frequency") +
+      theme_minimal()
+  )
+}
+```
+
+Do the same for factor variables
+```{r eval = FALSE}
+# Loop through each factor variable and create a bar plot
+for (var in factor_vars) {
+  print(
+    ggplot(df_train, aes_string(x = var)) +
+      geom_bar(fill = "steelblue") +
+      labs(title = paste("Frequency of", var),
+           x = var, y = "Count") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+}
+```
+
+Now explore by Diabetes_Binary (outcome) - continuous variables first
+```{r eval = FALSE}
+for (var in continuous_vars) {
+  print(
+    ggplot(df_train, aes_string(x = var, fill = "Diabetes_binary")) +
+      geom_histogram(position = "identity", bins = 30, alpha = 0.6, color = "black") +
+      labs(title = paste("Histogram of", var, "by Diabetes_binary"),
+           x = var, y = "Frequency", fill = "Diabetes") +
+      theme_minimal()
+  )
+}
+```
+
+Now factor variables
+```{r eval = FALSE}
+for (var in factor_vars) {
+  print(
+    ggplot(df_train, aes_string(x = var, fill = "Diabetes_binary")) +
+      geom_bar(position = "dodge") +
+      labs(title = paste("Frequency of", var, "by Diabetes_binary"),
+           x = var, y = "Count", fill = "Diabetes") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+}
+```
+
+What about proportions insted of raw counts
+```{r eval = FALSE}
+factor_vars_ <- setdiff(factor_vars, "Diabetes_binary")
+for (var in factor_vars_) {
+  df_prop <- df_train %>%
+    group_by(Diabetes_binary, !!sym(var)) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(Diabetes_binary) %>%
+    mutate(prop = n / sum(n) * 100)
+
+  print(
+    ggplot(df_prop, aes_string(x = var, y = "prop", fill = "Diabetes_binary")) +
+      geom_bar(stat = "identity", position = "dodge") +
+      labs(title = paste("Relative Proportions of", var, "by Diabetes_binary"),
+           x = var, y = "Percentage", fill = "Diabetes") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+}
+```
+
+Now I want to explore summary statistics by my outcome
+```{r eval = FALSE}
+df_train %>%
+  tbl_summary(by = Diabetes_binary,  
+              statistic = list(all_continuous() ~ "{mean} ({sd})",
+                              all_categorical() ~ "{n} ({p}%)"),
+              missing = "no") %>%
+  add_p() %>%             
+  bold_labels()
+```
+
+Separate the outcome variable and predictors
+```{r eval = FALSE}
+# Add split indicator
+df_train$set <- "train"
+df_test$set <- "test"
+
+# Combine training and test sets
+df_all <- rbind(df_train, df_test)
+
+# Ensure Diabetes_binary is 0/1 (already 0/1 if factor coded earlier)
+df_all$Diabetes_binary <- as.numeric(df_all$Diabetes_binary)
+
+# Create model matrix (predictors only, drop intercept and set column)
+X_all <- model.matrix(Diabetes_binary ~ . -set, data = df_all)[, -1]
+
+# Split back out into training and test sets
+X_train <- X_all[df_all$set == "train", ]
+X_test  <- X_all[df_all$set == "test", ]
+
+y_train <- df_all$Diabetes_binary[df_all$set == "train"]
+y_test  <- df_all$Diabetes_binary[df_all$set == "test"]
+
+# Confirm alignment
+stopifnot(nrow(X_train) == length(y_train))
+stopifnot(nrow(X_test) == length(y_test))
+```
+
+Create function to calculat pr_auc, ROC_auc, and f1 score averaged across folds for cross-validation
+```{r eval = FALSE}
+calculate_cv_metrics <- function(formula, train_data, folds = 5, outcome_var = "Diabetes_binary") {
+  library(PRROC)
+  library(pROC)
+  library(caret)
+  
+  pr_aucs <- numeric(folds)
+  roc_aucs <- numeric(folds)
+  f1_scores <- numeric(folds)
+  
+  for (fold in 1:folds) {
+    set.seed(fold)
+    train_indices <- sample(seq_len(nrow(train_data)), size = 0.8 * nrow(train_data))
+    validation_indices <- setdiff(seq_len(nrow(train_data)), train_indices)
+    
+    train_fold <- train_data[train_indices, ]
+    validation_fold <- train_data[validation_indices, ]
+    
+    model <- glm(formula, data = train_fold, family = "binomial")
+    predictions <- predict(model, newdata = validation_fold, type = "response")
+    
+    actual <- validation_fold[[outcome_var]]
+    
+    # PR AUC
+    pr <- pr.curve(
+      scores.class0 = predictions[actual == 1],
+      scores.class1 = predictions[actual == 0],
+      curve = FALSE
+    )
+    pr_aucs[fold] <- pr$auc.integral
+    
+    # ROC AUC
+    roc <- roc(actual, predictions)
+    roc_aucs[fold] <- auc(roc)
+    
+    # F1 Score (requires binary class prediction)
+    predicted_class <- ifelse(predictions >= 0.5, 1, 0)
+    confusion <- confusionMatrix(
+      factor(predicted_class, levels = c(0, 1)),
+      factor(actual, levels = c(0, 1))
+    )
+    f1_scores[fold] <- confusion$byClass["F1"]
+  }
+  
+  return(list(
+    pr_auc = mean(pr_aucs),
+    roc_auc = mean(roc_aucs),
+    f1_score = mean(f1_scores)
+  ))
+}
+```
+
+What does the original full model look like with logit?
+```{r eval = FALSE}
+calculate_cv_metrics(
+  formula = Diabetes_binary ~ .,
+  train_data = df_train,
+  folds = 5,
+  outcome_var = "Diabetes_binary"
+)
+```
+
+Now employ abess (best subsets), ridge, lasso, and elastic net to compare the best model by modifying function above
+```{r eval = FALSE}
+calculate_cv_metrics <- function(train_data, outcome_var = "Diabetes_binary", folds = 5, method = "glm", alpha_val = 1) {
+  pr_aucs <- numeric(folds)
+  roc_aucs <- numeric(folds)
+  f1_scores <- numeric(folds)
+  
+  predictors <- setdiff(names(train_data), outcome_var)
+  X <- model.matrix(as.formula(paste(outcome_var, "~ .")), data = train_data)[, -1]
+  y <- train_data[[outcome_var]]
+
+  for (fold in 1:folds) {
+    set.seed(fold)
+    train_indices <- sample(seq_len(nrow(train_data)), size = 0.8 * nrow(train_data))
+    validation_indices <- setdiff(seq_len(nrow(train_data)), train_indices)
+    
+    X_train <- X[train_indices, ]
+    y_train <- y[train_indices]
+    X_val <- X[validation_indices, ]
+    y_val <- y[validation_indices]
+    
+    # Fit model based on method
+    if (method == "glm") {
+      model <- glm(as.formula(paste(outcome_var, "~ .")), data = train_data[train_indices, ], family = "binomial")
+      preds <- predict(model, newdata = train_data[validation_indices, ], type = "response")
+    
+    } else if (method == "abess") {
+      model <- abess(X_train, y_train, family = "binomial")
+      preds <- predict(model, newx = X_val, type = "response")
+      
+    } else if (method %in% c("lasso", "ridge", "elasticnet")) {
+      alpha_val <- switch(method,
+                          lasso = 1,
+                          ridge = 0,
+                          elasticnet = alpha_val)  # custom alpha for EN
+      
+      cvfit <- cv.glmnet(X_train, y_train, alpha = alpha_val, family = "binomial")
+      preds <- predict(cvfit, newx = X_val, type = "response", s = "lambda.min")
+      preds <- as.numeric(preds)
+    }
+
+    # PR AUC
+    pr <- pr.curve(scores.class0 = preds[y_val == 1],
+                   scores.class1 = preds[y_val == 0],
+                   curve = FALSE)
+    pr_aucs[fold] <- pr$auc.integral
+
+    # ROC AUC
+    roc <- roc(y_val, preds)
+    roc_aucs[fold] <- auc(roc)
+
+    # F1
+    pred_class <- ifelse(preds >= 0.5, 1, 0)
+    cm <- confusionMatrix(factor(pred_class, levels = c(0,1)),
+                          factor(y_val, levels = c(0,1)))
+    f1_scores[fold] <- cm$byClass["F1"]
+  }
+
+  return(list(
+    method = method,
+    pr_auc = mean(pr_aucs),
+    roc_auc = mean(roc_aucs),
+    f1_score = mean(f1_scores)
+  ))
+}
+```
+
+Some of the training times were initially taking too long, to reduce this I took a sample of the df_train data
+```{r eval = FALSE}
+set.seed(123)
+df_train$set <- NULL
+df_test$set <- NULL
+df_sample <- df_train[sample(1:nrow(df_train), 50000), ]
+```
+
+Now apply function and create results - from output below, the best model chosen from cross-validation is Ridge given it has the highest PR AUC curve which has the greatest importance for imbalanced data and the highest F1 score 
+```{r eval = FALSE}
+results <- list(
+  glm = calculate_cv_metrics(df_sample, method = "glm"),
+  abess = calculate_cv_metrics(df_sample, method = "abess"),
+  lasso = calculate_cv_metrics(df_sample, method = "lasso"),
+  ridge = calculate_cv_metrics(df_sample, method = "ridge"),
+  elasticnet = calculate_cv_metrics(df_sample, method = "elasticnet", alpha_val = 0.5)
+)
+```
+
+
+```{r eval=FALSE}
+# View results
+results_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x)))
+rownames(results_df) <- names(results)
+print(results_df)
+```
+
+
+```{r eval = FALSE}
+df_sample$Diabetes_binary <- factor(df_sample$Diabetes_binary, levels = c(0, 1), labels = c("No", "Yes"))
+```
+
+Hyperparameter tuning function for KNN using caret
+```{r eval = FALSE}
+calculate_knn_metrics <- function(train_data, outcome_var = "Diabetes_binary", folds = 5, k_values = c(3, 5, 7, 9)) {
+  set.seed(123)
+  cat("Starting KNN training with", folds, "CV folds and", length(k_values), "k-values...\n")
+
+  ctrl <- trainControl(method = "cv", number = folds,
+                       classProbs = TRUE,
+                       summaryFunction = twoClassSummary,
+                       savePredictions = "final")
+
+  knn_fit <- train(
+    as.formula(paste(outcome_var, "~ .")),
+    data = train_data,
+    method = "knn",
+    tuneGrid = data.frame(k = k_values),
+    trControl = ctrl,
+    metric = "ROC"
+  )
+  cat("KNN training complete.\n")
+
+  best_k <- knn_fit$bestTune$k
+  cat("Best k selected:", best_k, "\n")
+
+  preds <- knn_fit$pred
+  preds <- preds[preds$k == best_k, ]
+
+  pr <- pr.curve(scores.class0 = preds$Yes[preds$obs == "Yes"],
+                 scores.class1 = preds$Yes[preds$obs == "No"], curve = FALSE)
+  roc_val <- roc(preds$obs, preds$Yes)
+  pred_class <- ifelse(preds$Yes >= 0.5, "Yes", "No")
+  f1 <- caret::confusionMatrix(factor(pred_class, levels = c("No", "Yes")),
+                               factor(preds$obs, levels = c("No", "Yes")))$byClass["F1"]
+
+  return(list(
+    model = "KNN",
+    best_k = best_k,
+    pr_auc = pr$auc.integral,
+    roc_auc = auc(roc_val),
+    f1_score = f1,
+    tuneGrid = knn_fit$results,
+    bestTune = knn_fit$bestTune
+  ))
+}
+```
+
+Apply KNN function to output best hyperparameters
+```{r eval = FALSE}
+knn_results <- calculate_knn_metrics(df_sample)
+```
+
+```{r eval = FALSE}
+print(knn_results)
+```
+
+Hyperparameter tuning for SVM using caret - I reduced the folds to 3-fold because training time was taking too long, in a professional setting I would keep this at k=5 or k=10
+I added time stampst so I knew it was working - since the training was so slow
+```{r eval = FALSE}
+calculate_svm_metrics <- function(train_data, outcome_var = "Diabetes_binary", folds = 3) {
+  set.seed(123)
+  cat("SVM TRAINING STARTED \n")
+  cat("Start time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+  cat("Rows:", nrow(train_data), " | CV folds:", folds, "\n\n")
+
+  ctrl <- trainControl(method = "cv", number = folds,
+                       classProbs = TRUE,
+                       summaryFunction = twoClassSummary,
+                       savePredictions = "final")
+
+  svm_fit <- train(
+    as.formula(paste(outcome_var, "~ .")),
+    data = train_data,
+    method = "svmRadial",
+    tuneLength = 5,
+    trControl = ctrl,
+    metric = "ROC"
+  )
+
+  cat("\nSVM training complete at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+
+  best_params <- svm_fit$bestTune
+  cat("Best parameters selected: sigma =", best_params$sigma, ", C =", best_params$C, "\n\n")
+
+  preds <- svm_fit$pred
+  preds <- preds[preds$sigma == best_params$sigma & preds$C == best_params$C, ]
+
+  pr <- pr.curve(scores.class0 = preds$Yes[preds$obs == "Yes"],
+                 scores.class1 = preds$Yes[preds$obs == "No"], curve = FALSE)
+  roc_val <- roc(preds$obs, preds$Yes)
+  pred_class <- ifelse(preds$Yes >= 0.5, "Yes", "No")
+  f1 <- caret::confusionMatrix(factor(pred_class, levels = c("No", "Yes")),
+                               factor(preds$obs, levels = c("No", "Yes")))$byClass["F1"]
+
+  return(list(
+    model = "SVM",
+    best_sigma = best_params$sigma,
+    best_C = best_params$C,
+    pr_auc = pr$auc.integral,
+    roc_auc = auc(roc_val),
+    f1_score = f1,
+    tuneGrid = svm_fit$results,
+    bestTune = svm_fit$bestTune
+  ))
+}
+```
+
+Apply SVM function to output best hyperparameter
+```{r eval = FALSE}
+svm_results <- calculate_svm_metrics(df_sample)
+```
+
+
+```{r}
+print(svm_results)
+```
+
+
+Hyperparameter tuning for Random Forest using caret
+```{r eval = FALSE}
+calculate_rf_metrics <- function(train_data, outcome_var = "Diabetes_binary", folds = 5) {
+  set.seed(123)
+  cat("Starting Random Forest training with", folds, "CV folds...\n")
+
+  ctrl <- trainControl(method = "cv", number = folds,
+                       classProbs = TRUE,
+                       summaryFunction = twoClassSummary,
+                       savePredictions = "final")
+
+  rf_fit <- train(
+    as.formula(paste(outcome_var, "~ .")),
+    data = train_data,
+    method = "rf",
+    tuneLength = 5,
+    trControl = ctrl,
+    metric = "ROC"
+  )
+  cat("Random Forest training complete.\n")
+
+  best_mtry <- rf_fit$bestTune$mtry
+  cat("Best mtry selected:", best_mtry, "\n")
+
+  preds <- rf_fit$pred
+  preds <- preds[preds$mtry == best_mtry, ]
+
+  pr <- pr.curve(scores.class0 = preds$Yes[preds$obs == "Yes"],
+                 scores.class1 = preds$Yes[preds$obs == "No"], curve = FALSE)
+  roc_val <- roc(preds$obs, preds$Yes)
+  pred_class <- ifelse(preds$Yes >= 0.5, "Yes", "No")
+  f1 <- caret::confusionMatrix(factor(pred_class, levels = c("No", "Yes")),
+                               factor(preds$obs, levels = c("No", "Yes")))$byClass["F1"]
+
+  return(list(
+    model = "Random Forest",
+    best_mtry = best_mtry,
+    pr_auc = pr$auc.integral,
+    roc_auc = auc(roc_val),
+    f1_score = f1,
+    tuneGrid = rf_fit$results,
+    bestTune = rf_fit$bestTune
+  ))
+}
+```
+
+Apply RF function to output best hyperparameter
+```{r eval = FALSE}
+rf_results  <- calculate_rf_metrics(df_sample)
+```
+
+```{r eval=FALSE}
+print(rf_results)
+```
+
+Hyperparameter tuning for XGBoost using caret 
+```{r eval = FALSE}
+calculate_xgb_metrics <- function(train_data, outcome_var = "Diabetes_binary", folds = 5) {
+  set.seed(123)
+  cat("Starting XGBoost training with", folds, "CV folds...\n")
+
+  ctrl <- trainControl(method = "cv", number = folds,
+                       classProbs = TRUE,
+                       summaryFunction = twoClassSummary,
+                       savePredictions = "final")
+
+  xgb_fit <- train(
+    as.formula(paste(outcome_var, "~ .")),
+    data = train_data,
+    method = "xgbTree",
+    tuneLength = 5,
+    trControl = ctrl,
+    metric = "ROC"
+  )
+  cat("XGBoost training complete.\n")
+
+  best_params <- xgb_fit$bestTune
+  cat("Best XGBoost parameters selected:\n")
+  print(best_params)
+
+  preds <- xgb_fit$pred
+  cond <- apply(preds[, names(best_params)], 1, function(row) all(row == as.numeric(best_params)))
+  preds <- preds[cond, ]
+
+  pr <- pr.curve(scores.class0 = preds$Yes[preds$obs == "Yes"],
+                 scores.class1 = preds$Yes[preds$obs == "No"], curve = FALSE)
+  roc_val <- roc(preds$obs, preds$Yes)
+  pred_class <- ifelse(preds$Yes >= 0.5, "Yes", "No")
+  f1 <- caret::confusionMatrix(factor(pred_class, levels = c("No", "Yes")),
+                               factor(preds$obs, levels = c("No", "Yes")))$byClass["F1"]
+
+  return(list(
+    model = "XGBoost",
+    best_params = best_params,
+    pr_auc = pr$auc.integral,
+    roc_auc = auc(roc_val),
+    f1_score = f1,
+    tuneGrid = xgb_fit$results,
+    bestTune = xgb_fit$bestTune
+  ))
+}
+```
+
+Apply XGBoost function to output best hyperparameter 
+```{r eval = FALSE}
+xgb_results <- calculate_xgb_metrics(df_sample)
+```
+
+```{r eval = FALSE}
+print(xgb_results)
+```
+
+```{r eval = FALSE}
+df_train$Diabetes_binary <- as.numeric(df_train$Diabetes_binary == "Yes")
+df_test$Diabetes_binary <- as.numeric(df_test$Diabetes_binary == "Yes")
+# Set outcome variable (0/1 numeric)
+y_train <- df_train$Diabetes_binary
+y_test  <- df_test$Diabetes_binary
+
+# Build design matrices with predictors only (drop outcome)
+X_train <- model.matrix(~ ., data = df_train[, -1])[, -1]
+X_test  <- model.matrix(~ ., data = df_test[, -1])[, -1]
+```
+
+
+Train each model family w/ hyperparameters chosen through cross-validation on entire training data
+```{r eval = FALSE}
+# get best lambda value for ridge
+X_sample <- model.matrix(Diabetes_binary ~ ., data = df_sample)[, -1]
+y_sample <- as.numeric(df_sample$Diabetes_binary == "Yes")
+
+cv_ridge <- cv.glmnet(X_sample, y_sample, alpha = 0, family = "binomial")
+best_lambda <- cv_ridge$lambda.min
+best_lambda
+```
+```{r eval = FALSE}
+final_ridge <- glmnet(
+  x = X_train,
+  y = y_train,
+  family = "binomial",
+  alpha = 0,
+  lambda = 0.009191627
+)
+```
+
+
+
+```{r eval = FALSE}
+final_knn <- knn(
+  train = X_train,
+  test = X_test,
+  cl = y_train,
+  k = 9  
+)
+```
+
+I took a subsample of the train & test data because the svm was taking too long to train - in practice I would not do this or would standardize across all models for direct comparison but due to this being a skill building exercise I mainly wanted to gain an understanding of how to do this in practice - this took too long to train, I proceeded without this as it took too long to load and this was not one of the best performing models so feel it is fine to proceed without
+```{r eval = FALSE}
+# Subsample training data (e.g., 50,000 rows)
+set.seed(123)
+df_train$set <- NULL
+df_test$set <- NULL
+df_train_sub <- df_train[sample(nrow(df_train), size = 50000), ]
+
+# Subsample test data (e.g., 10,000 rows)
+df_test_sub <- df_test[sample(nrow(df_test), size = 10000), ]
+
+# Format outcome as factors with consistent levels
+df_train_sub$Diabetes_binary <- factor(df_train_sub$Diabetes_binary, levels = c("0", "1"), labels = c("No", "Yes"))
+df_test_sub$Diabetes_binary  <- factor(df_test_sub$Diabetes_binary,  levels = c("0", "1"), labels = c("No", "Yes"))
+
+ctrl <- trainControl(method = "none", classProbs = TRUE)
+
+# Train SVM on subsample
+final_svm <- train(
+  Diabetes_binary ~ .,
+  data = df_train_sub,
+  method = "svmRadial",
+  trControl = ctrl,
+  tuneGrid = data.frame(
+    sigma = svm_results$best_sigma,
+    C = svm_results$best_C
+  )
+)
+```
+
+
+```{r eval = FALSE}
+df_train <- df_train[!is.na(df_train$Diabetes_binary), ]
+df_train$Diabetes_binary <- factor(df_train$Diabetes_binary, levels = c(0, 1), labels = c("No", "Yes"))
+```
+```{r eval = FALSE}
+df_train[] <- lapply(df_train, function(x) {
+  if (is.character(x)) factor(x) else x
+})
+df_train$set <- NULL
+final_rf <- train(
+  Diabetes_binary ~ .,
+  data = df_train,
+  method = "rf",
+  trControl = trainControl(classProbs = TRUE),
+  tuneGrid = data.frame(mtry = rf_results$best_mtry),
+  ntree = 500
+)
+```
+
+
+```{r eval = FALSE}
+y_train <- as.numeric(as.character(y_train))
+y_train <- ifelse(y_train == 1, 0, 1)
+final_xgb <- xgboost(
+  data = X_train,
+  label = y_train,
+  nrounds = 150,
+  max_depth = 2,
+  eta = 0.3,
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.875,
+  objective = "binary:logistic"
+)
+```
+
+
+```{r eval = FALSE}
+save(
+  final_ridge, final_knn, final_rf, final_xgb,
+  file = "final_models.RData"
+)
+```
+
+
+Apply models on test data to compare performance 
+```{r eval = FALSE}
+evaluate_model <- function(pred_probs, pred_class, true_labels) {
+  pr <- pr.curve(scores.class0 = pred_probs[true_labels == 1],
+                 scores.class1 = pred_probs[true_labels == 0],
+                 curve = FALSE)
+  roc <- roc(true_labels, pred_probs)
+  cm <- confusionMatrix(
+    factor(pred_class, levels = c(0, 1)),
+    factor(true_labels, levels = c(0, 1))
+  )
+  f1 <- cm$byClass["F1"]
+
+  return(list(
+    pr_auc = pr$auc.integral,
+    roc_auc = auc(roc),
+    f1_score = f1
+  ))
+}
+```
+
+```{r eval = FALSE}
+# Ensure it's a factor first
+df_train$Diabetes_binary <- factor(df_train$Diabetes_binary)
+df_test$Diabetes_binary  <- factor(df_test$Diabetes_binary)
+
+# Check levels to confirm correct order
+print(levels(df_train$Diabetes_binary))
+
+# Force levels to be correct: No = 0, Yes = 1
+df_train$Diabetes_binary <- factor(df_train$Diabetes_binary, levels = c("0", "1"))
+df_test$Diabetes_binary  <- factor(df_test$Diabetes_binary,  levels = c("0", "1"))
+
+# Convert to numeric: "0" → 0, "1" → 1
+df_train$Diabetes_binary <- as.numeric(as.character(df_train$Diabetes_binary))
+df_test$Diabetes_binary  <- as.numeric(as.character(df_test$Diabetes_binary))
+
+# Final outcome assignment
+y_train <- df_train$Diabetes_binary
+y_test  <- df_test$Diabetes_binary
+```
+
+
+
+```{r eval = FALSE}
+ridge_probs <- predict(final_ridge, newx = X_test, type = "response")[, 1]
+ridge_class <- ifelse(ridge_probs >= 0.5, 1, 0)
+ridge_metrics <- evaluate_model(ridge_probs, ridge_class, y_test)
+```
+
+```{r eval = FALSE}}
+knn_pred <- knn(train = X_train, test = X_test, cl = y_train, k = 9, prob = TRUE)
+knn_class <- as.numeric(knn_pred) - 1
+knn_probs <- ifelse(knn_class == 1, attr(knn_pred, "prob"), 1 - attr(knn_pred, "prob"))
+knn_metrics <- evaluate_model(knn_probs, knn_class, y_test)
+```
+
+```{r eval = FALSE}
+rf_probs <- predict(final_rf, newdata = df_test[, -1], type = "prob")[, "Yes"]
+rf_class <- ifelse(rf_probs >= 0.5, 1, 0)
+rf_metrics <- evaluate_model(rf_probs, rf_class, y_test)
+```
+
+```{r eval = FALSE}
+xgb_probs <- predict(final_xgb, newdata = X_test)
+xgb_class <- ifelse(xgb_probs >= 0.5, 1, 0)
+xgb_metrics <- evaluate_model(xgb_probs, xgb_class, y_test)
+```
+From the below output the best PR_AUC is XGBoost, the best ROC_AUC is XGBoost, and the best F1_Score is XGBoost, with ridge logit as the second best model and RF coming in 3rd - will proceed with XGBoost 
+```{r eval = FALSE}
+results_df <- data.frame(
+  Model = c("Ridge", "KNN", "Random Forest", "XGBoost"),
+  PR_AUC = c(ridge_metrics$pr_auc, knn_metrics$pr_auc,
+             rf_metrics$pr_auc, xgb_metrics$pr_auc),
+  ROC_AUC = c(ridge_metrics$roc_auc, knn_metrics$roc_auc, 
+              rf_metrics$roc_auc, xgb_metrics$roc_auc),
+  F1_Score = c(ridge_metrics$f1_score, knn_metrics$f1_score, 
+               rf_metrics$f1_score, xgb_metrics$f1_score)
+)
+
+print(results_df)
+```
+
+
+Visualize results for XGBoost
+```{r eval = FALSE}
+pred_probs <- predict(final_xgb, newdata = X_test)
+pr <- pr.curve(
+  scores.class0 = pred_probs[y_test == 1],
+  scores.class1 = pred_probs[y_test == 0],
+  curve = TRUE
+)
+
+plot(pr, main = paste0("PR Curve (AUC = ", round(pr$auc.integral, 3), ")"))
+
+roc_obj <- roc(y_test, pred_probs)
+
+plot(roc_obj, col = "blue", lwd = 2, main = paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")"))
+abline(a = 0, b = 1, lty = 2, col = "gray")
+```
+In ggplot
+```{r eval=FALSE}
+pr_df <- as.data.frame(pr$curve)
+colnames(pr_df) <- c("Recall", "Precision", "Threshold")
+
+# Plot with ggplot
+ggplot(pr_df, aes(x = Recall, y = Precision)) +
+  geom_line(color = "darkgreen", size = 1.2) +
+  labs(
+    title = paste0("Precision-Recall Curve (AUC = ", round(pr$auc.integral, 3), ")"),
+    x = "Recall",
+    y = "Precision"
+  ) +
+  theme_minimal()
+```
+
+```{r eval=FALSE}
+# Extract ROC curve data
+roc_df <- data.frame(
+  FPR = 1 - roc_obj$specificities,
+  TPR = roc_obj$sensitivities
+)
+
+# Plot with ggplot
+ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  labs(
+    title = paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")"),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  theme_minimal()
+```
+
+
+Variable importance plot for best model  
+```{r eval = FALSE}
+# Get importance matrix
+xgb_imp <- xgb.importance(model = final_xgb)
+
+# View top 20 important features
+imp_df <- xgb_imp[1:20, ]
+
+# Plot
+ggplot(imp_df, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Important Features - XGBoost",
+    x = "Feature", y = "Gain"
+  ) +
+  theme_minimal()
+```
+
+Plot XGBoost Trees
+```{r eval = FALSE}
+library(DiagrammeR)
+# Plot tree #0
+xgb.plot.tree(model = final_xgb, trees = 0)
+```
+
